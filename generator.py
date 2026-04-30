@@ -122,6 +122,7 @@ class StressPredictor:
 # ─── Singleton predictor ─────────────────────────────────────────────────────
 predictor = StressPredictor()
 
+#hence check everything
 
 # ─── Room Data Generator ─────────────────────────────────────────────────────
 def generate_room_data(room_id: str, ward: str, dt: Optional[datetime] = None) -> dict:
