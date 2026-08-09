@@ -12,9 +12,9 @@
  */
 
 const express = require("express");
-const cors    = require("cors");
+const cors = require("cors");
 
-const app  = express();
+const app = express();
 const PORT = 5000;
 
 app.use(cors());
@@ -22,18 +22,52 @@ app.use(express.json());
 
 // ─── Hospital Layout ─────────────────────────────────────────────────────────
 const WARDS = {
-  ICU:       { rooms: ["ICU-1","ICU-2","ICU-3","ICU-4"],                        bedCapacity: 4, baseStress: 65, variance: 20 },
-  General:   { rooms: ["GEN-1","GEN-2","GEN-3","GEN-4","GEN-5","GEN-6"],        bedCapacity: 6, baseStress: 42, variance: 18 },
-  Emergency: { rooms: ["ER-1","ER-2","ER-3","ER-4"],                            bedCapacity: 4, baseStress: 72, variance: 22 },
+  ICU: {
+    rooms: ["ICU-1", "ICU-2", "ICU-3", "ICU-4"],
+    bedCapacity: 4,
+    baseStress: 65,
+    variance: 20,
+  },
+  General: {
+    rooms: ["GEN-1", "GEN-2", "GEN-3", "GEN-4", "GEN-5", "GEN-6"],
+    bedCapacity: 6,
+    baseStress: 42,
+    variance: 18,
+  },
+  Emergency: {
+    rooms: ["ER-1", "ER-2", "ER-3", "ER-4"],
+    bedCapacity: 4,
+    baseStress: 72,
+    variance: 22,
+  },
 };
 
 // ─── Time-of-Day Multipliers (matches generator.py) ──────────────────────────
 const HOURLY_PATTERN = {
-  0:0.30, 1:0.25, 2:0.22, 3:0.20, 4:0.22,
-  5:0.35, 6:0.52, 7:0.70, 8:0.85, 9:0.90,
-  10:0.88,11:0.82,12:0.75,13:0.70,14:0.65,
-  15:0.60,16:0.55,17:0.50,18:0.45,19:0.42,
-  20:0.40,21:0.38,22:0.35,23:0.32,
+  0: 0.3,
+  1: 0.25,
+  2: 0.22,
+  3: 0.2,
+  4: 0.22,
+  5: 0.35,
+  6: 0.52,
+  7: 0.7,
+  8: 0.85,
+  9: 0.9,
+  10: 0.88,
+  11: 0.82,
+  12: 0.75,
+  13: 0.7,
+  14: 0.65,
+  15: 0.6,
+  16: 0.55,
+  17: 0.5,
+  18: 0.45,
+  19: 0.42,
+  20: 0.4,
+  21: 0.38,
+  22: 0.35,
+  23: 0.32,
 };
 
 // ─── In-memory history store (last 20 data points per room) ──────────────────
@@ -55,44 +89,48 @@ function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
 function getTimeMult() {
-  return HOURLY_PATTERN[new Date().getHours()] ?? 0.50;
+  return HOURLY_PATTERN[new Date().getHours()] ?? 0.5;
 }
 
 // ─── AI Stress Scoring (mirrors Python StressPredictor) ──────────────────────
 const WEIGHTS = {
-  occupancyRate:      0.30,
-  noiseLevel:         0.20,
-  staffDeficitRate:   0.25,
-  criticalAlertRate:  0.15,
-  equipmentFaultRate: 0.10,
+  occupancyRate: 0.3,
+  noiseLevel: 0.2,
+  staffDeficitRate: 0.25,
+  criticalAlertRate: 0.15,
+  equipmentFaultRate: 0.1,
 };
 
 function calcStress(features) {
   let score = 0;
-  score += WEIGHTS.occupancyRate      * features.occupancyRate;
-  score += WEIGHTS.noiseLevel         * features.noiseLevel;
-  score += WEIGHTS.staffDeficitRate   * features.staffDeficitRate;
-  score += WEIGHTS.criticalAlertRate  * features.criticalAlertRate;
+  score += WEIGHTS.occupancyRate * features.occupancyRate;
+  score += WEIGHTS.noiseLevel * features.noiseLevel;
+  score += WEIGHTS.staffDeficitRate * features.staffDeficitRate;
+  score += WEIGHTS.criticalAlertRate * features.criticalAlertRate;
   score += WEIGHTS.equipmentFaultRate * features.equipmentFaultRate;
   score += gaussianNoise(4);
   return parseFloat(clamp(score, 0, 100).toFixed(1));
 }
 
 function getLevel(stress) {
-  if (stress > 75)  return "HIGH";
+  if (stress > 75) return "HIGH";
   if (stress >= 40) return "MEDIUM";
   return "LOW";
 }
 
 function getRecommendation(level, ward, features) {
   if (level === "HIGH") {
-    if (features.staffDeficitRate > 60) return `Critical understaffing in ${ward} — immediate reallocation needed`;
-    if (features.occupancyRate    > 90) return `${ward} near full capacity — consider patient transfer`;
-    if (features.equipmentFaultRate > 50) return `Equipment faults critical in ${ward} — dispatch maintenance`;
+    if (features.staffDeficitRate > 60)
+      return `Critical understaffing in ${ward} — immediate reallocation needed`;
+    if (features.occupancyRate > 90)
+      return `${ward} near full capacity — consider patient transfer`;
+    if (features.equipmentFaultRate > 50)
+      return `Equipment faults critical in ${ward} — dispatch maintenance`;
     return `${ward}: High stress — monitor closely, prepare contingency`;
   }
   if (level === "MEDIUM") {
-    if (features.staffDeficitRate > 30) return `${ward}: Staff slightly low — consider redistribution`;
+    if (features.staffDeficitRate > 30)
+      return `${ward}: Staff slightly low — consider redistribution`;
     return `${ward}: Elevated load — keep on watch`;
   }
   return `${ward}: Stable — no action needed`;
@@ -100,72 +138,95 @@ function getRecommendation(level, ward, features) {
 
 // ─── Room Data Generator ─────────────────────────────────────────────────────
 function generateRoom(roomId, ward) {
-  const cfg       = WARDS[ward];
-  const timeMult  = getTimeMult();
-  const bedCap    = cfg.bedCapacity;
-  const baseOcc   = cfg.baseStress / 100;
+  const cfg = WARDS[ward];
+  const timeMult = getTimeMult();
+  const bedCap = cfg.bedCapacity;
+  const baseOcc = cfg.baseStress / 100;
 
   // Patients
-  const expectedPts  = Math.round(baseOcc * timeMult * bedCap);
-  const patients     = clamp(expectedPts + Math.round(gaussianNoise(0.8)), 1, bedCap);
+  const expectedPts = Math.round(baseOcc * timeMult * bedCap);
+  const patients = clamp(
+    expectedPts + Math.round(gaussianNoise(0.8)),
+    1,
+    bedCap,
+  );
   const occupancyPct = parseFloat(((patients / bedCap) * 100).toFixed(1));
 
   // Staff
   const requiredNurses = Math.max(1, Math.round(patients / 2));
-  const nursesOnDuty   = clamp(requiredNurses + Math.round(gaussianNoise(0.6)) - (timeMult > 0.7 ? 1 : 0), 0, 6);
-  const staffDeficit   = Math.max(0, requiredNurses - nursesOnDuty);
+  const nursesOnDuty = clamp(
+    requiredNurses + Math.round(gaussianNoise(0.6)) - (timeMult > 0.7 ? 1 : 0),
+    0,
+    6,
+  );
+  const staffDeficit = Math.max(0, requiredNurses - nursesOnDuty);
 
   // Noise (correlated with occupancy + time)
-  const noiseBase  = 40 + (patients / bedCap) * 50 * timeMult;
+  const noiseBase = 40 + (patients / bedCap) * 50 * timeMult;
   const noiseLevel = clamp(Math.round(noiseBase + gaussianNoise(6)), 20, 100);
 
   // Alerts
-  const activeAlerts   = clamp(Math.round((patients / bedCap) * 4 * timeMult + gaussianNoise(0.7)), 0, 5);
-  const criticalAlerts = clamp(Math.round((patients / bedCap) * 1.5 * timeMult + gaussianNoise(0.5)), 0, 2);
+  const activeAlerts = clamp(
+    Math.round((patients / bedCap) * 4 * timeMult + gaussianNoise(0.7)),
+    0,
+    5,
+  );
+  const criticalAlerts = clamp(
+    Math.round((patients / bedCap) * 1.5 * timeMult + gaussianNoise(0.5)),
+    0,
+    2,
+  );
 
   // Equipment
-  const faultBase      = ward === "ICU" || ward === "Emergency" ? 0.15 : 0.08;
-  const equipFaults    = clamp(Math.round(faultBase * 3 + gaussianNoise(0.3)), 0, 3);
+  const faultBase = ward === "ICU" || ward === "Emergency" ? 0.15 : 0.08;
+  const equipFaults = clamp(
+    Math.round(faultBase * 3 + gaussianNoise(0.3)),
+    0,
+    3,
+  );
 
   // Wait time
-  const waitBase  = 5 + (patients / bedCap) * 100 * timeMult;
-  const waitTime  = clamp(Math.round(waitBase + gaussianNoise(8)), 2, 180);
+  const waitBase = 5 + (patients / bedCap) * 100 * timeMult;
+  const waitTime = clamp(Math.round(waitBase + gaussianNoise(8)), 2, 180);
 
   // Anomaly injection (5% chance)
   const anomaly = Math.random() < 0.05;
 
   // Feature vector
   const features = {
-    occupancyRate:      anomaly ? clamp(occupancyPct * 1.5, 0, 100)  : occupancyPct,
-    noiseLevel:         anomaly ? clamp(noiseLevel   * 1.4, 0, 100)  : noiseLevel,
-    staffDeficitRate:   Math.max(0, (staffDeficit / Math.max(requiredNurses, 1)) * 100),
-    criticalAlertRate:  (criticalAlerts / 2) * 100,
+    occupancyRate: anomaly ? clamp(occupancyPct * 1.5, 0, 100) : occupancyPct,
+    noiseLevel: anomaly ? clamp(noiseLevel * 1.4, 0, 100) : noiseLevel,
+    staffDeficitRate: Math.max(
+      0,
+      (staffDeficit / Math.max(requiredNurses, 1)) * 100,
+    ),
+    criticalAlertRate: (criticalAlerts / 2) * 100,
     equipmentFaultRate: (equipFaults / 3) * 100,
   };
 
   const stress = calcStress(features);
-  const level  = getLevel(stress);
+  const level = getLevel(stress);
 
   return {
     roomId,
     ward,
-    timestamp:          new Date().toISOString(),
-    patientsCount:      patients,
-    bedCapacity:        bedCap,
+    timestamp: new Date().toISOString(),
+    patientsCount: patients,
+    bedCapacity: bedCap,
     occupancyPct,
     nursesOnDuty,
     requiredNurses,
-    staffStatus:        nursesOnDuty < requiredNurses ? "DEFICIT" : "OK",
+    staffStatus: nursesOnDuty < requiredNurses ? "DEFICIT" : "OK",
     activeAlerts,
     criticalAlerts,
     noiseLevel,
-    equipmentFaults:    equipFaults,
-    avgWaitTimeMins:    waitTime,
-    stressScore:        stress,
-    stressLevel:        level,
-    anomalyDetected:    anomaly,
-    recommendation:     getRecommendation(level, `${ward}/${roomId}`, features),
-    featureVector:      features,
+    equipmentFaults: equipFaults,
+    avgWaitTimeMins: waitTime,
+    stressScore: stress,
+    stressLevel: level,
+    anomalyDetected: anomaly,
+    recommendation: getRecommendation(level, `${ward}/${roomId}`, features),
+    featureVector: features,
   };
 }
 
@@ -193,7 +254,11 @@ const sseClients = new Set();
 function broadcastSSE(data) {
   const payload = `data: ${JSON.stringify(data)}\n\n`;
   for (const res of sseClients) {
-    try { res.write(payload); } catch { sseClients.delete(res); }
+    try {
+      res.write(payload);
+    } catch {
+      sseClients.delete(res);
+    }
   }
 }
 
@@ -207,7 +272,13 @@ setInterval(() => {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 // Health check
-app.get("/", (req, res) => res.json({ status: "ok", version: "2.0", timestamp: new Date().toISOString() }));
+app.get("/", (req, res) =>
+  res.json({
+    status: "ok",
+    version: "2.0",
+    timestamp: new Date().toISOString(),
+  }),
+);
 
 // Full room snapshot
 app.get("/data", (req, res) => {
@@ -222,37 +293,46 @@ app.get("/history/:roomId", (req, res) => {
 
 // AI Insights — rooms needing attention
 app.get("/insights", (req, res) => {
-  const snapshot   = generateSnapshot();
-  const highRooms  = snapshot.filter(r => r.stressLevel === "HIGH");
-  const medRooms   = snapshot.filter(r => r.stressLevel === "MEDIUM");
+  const snapshot = generateSnapshot();
+  const highRooms = snapshot.filter((r) => r.stressLevel === "HIGH");
+  const medRooms = snapshot.filter((r) => r.stressLevel === "MEDIUM");
 
   const insights = {
-    timestamp:     new Date().toISOString(),
+    timestamp: new Date().toISOString(),
     criticalCount: highRooms.length,
-    warningCount:  medRooms.length,
-    stableCount:   snapshot.filter(r => r.stressLevel === "LOW").length,
-    hospitalStressIndex: parseFloat((snapshot.reduce((s, r) => s + r.stressScore, 0) / snapshot.length).toFixed(1)),
+    warningCount: medRooms.length,
+    stableCount: snapshot.filter((r) => r.stressLevel === "LOW").length,
+    hospitalStressIndex: parseFloat(
+      (
+        snapshot.reduce((s, r) => s + r.stressScore, 0) / snapshot.length
+      ).toFixed(1),
+    ),
     topAlerts: [...highRooms, ...medRooms]
       .sort((a, b) => b.stressScore - a.stressScore)
       .slice(0, 5)
-      .map(r => ({
-        roomId:     r.roomId,
-        ward:       r.ward,
-        stress:     r.stressScore,
-        level:      r.stressLevel,
-        message:    r.recommendation,
-        anomaly:    r.anomalyDetected,
+      .map((r) => ({
+        roomId: r.roomId,
+        ward: r.ward,
+        stress: r.stressScore,
+        level: r.stressLevel,
+        message: r.recommendation,
+        anomaly: r.anomalyDetected,
       })),
     wardSummary: Object.entries(WARDS).map(([ward, cfg]) => {
-      const wardRooms = snapshot.filter(r => r.ward === ward);
-      const avgStress = parseFloat((wardRooms.reduce((s, r) => s + r.stressScore, 0) / wardRooms.length).toFixed(1));
+      const wardRooms = snapshot.filter((r) => r.ward === ward);
+      const avgStress = parseFloat(
+        (
+          wardRooms.reduce((s, r) => s + r.stressScore, 0) / wardRooms.length
+        ).toFixed(1),
+      );
       return {
         ward,
         avgStress,
-        level:        getLevel(avgStress),
-        highCount:    wardRooms.filter(r => r.stressLevel === "HIGH").length,
-        totalRooms:   cfg.rooms.length,
-        staffDeficit: wardRooms.filter(r => r.staffStatus === "DEFICIT").length,
+        level: getLevel(avgStress),
+        highCount: wardRooms.filter((r) => r.stressLevel === "HIGH").length,
+        totalRooms: cfg.rooms.length,
+        staffDeficit: wardRooms.filter((r) => r.staffStatus === "DEFICIT")
+          .length,
       };
     }),
   };
@@ -269,16 +349,18 @@ app.get("/stats", (req, res) => {
   const totalAlerts = snapshot.reduce((s, r) => s + r.criticalAlerts, 0);
 
   res.json({
-    timestamp:        new Date().toISOString(),
-    totalRooms:       snapshot.length,
-    totalPatients:    totalPts,
+    timestamp: new Date().toISOString(),
+    totalRooms: snapshot.length,
+    totalPatients: totalPts,
     totalBeds,
     overallOccupancy: parseFloat(((totalPts / totalBeds) * 100).toFixed(1)),
     totalNurses,
     totalCriticalAlerts: totalAlerts,
-    avgWaitTime:      Math.round(snapshot.reduce((s, r) => s + r.avgWaitTimeMins, 0) / snapshot.length),
-    highStressRooms:  snapshot.filter(r => r.stressLevel === "HIGH").length,
-    anomaliesActive:  snapshot.filter(r => r.anomalyDetected).length,
+    avgWaitTime: Math.round(
+      snapshot.reduce((s, r) => s + r.avgWaitTimeMins, 0) / snapshot.length,
+    ),
+    highStressRooms: snapshot.filter((r) => r.stressLevel === "HIGH").length,
+    anomaliesActive: snapshot.filter((r) => r.anomalyDetected).length,
   });
 });
 
