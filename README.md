@@ -7,7 +7,6 @@
   <img src="https://img.shields.io/github/last-commit/givemehat/ignition-project?style=for-the-badge&color=red" alt="Last Commit" />
 </div>
 
-
 Vite React template and generator.
 
 ## Description
